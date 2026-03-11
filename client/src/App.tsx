@@ -10,7 +10,7 @@ function Header() {
   const [utc, setUtc] = useState('');
   const processes = useDashboardStore((s) => s.processes);
   const sessions = useDashboardStore((s) => s.sessions);
-  const activeSessions = sessions.filter((s) => s.status === 'active').length;
+  const activeSessions = sessions.filter((s) => s.status === 'active' || s.status === 'idle').length;
 
   useEffect(() => {
     const tick = () => {
@@ -50,7 +50,7 @@ function Header() {
         >
           <span className="text-[oklch(0.65_0.20_195)]">{processes.length}</span> PROCESSES
           {' | '}
-          <span className="text-[oklch(0.65_0.20_195)]">{activeSessions}</span> ACTIVE SESSIONS
+          <span className="text-[oklch(0.65_0.20_195)]">{activeSessions}</span>/<span className="text-[oklch(0.65_0.20_195)]">{sessions.length}</span> SESSIONS
         </div>
       </div>
 
