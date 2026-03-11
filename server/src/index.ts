@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import http from 'http';
 import fs from 'fs';
+import path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { ServerMessage } from '@shared/types/ws-messages.js';
 import { logWatcher } from './services/log-watcher.js';
@@ -34,13 +35,23 @@ app.get('/api/processes', (_req, res) => {
 // Debug endpoint — shows what paths are being watched and whether they exist
 app.get('/api/debug', (_req, res) => {
   const paths = getCopilotPaths();
-  const check = (p: string) => ({
-    path: p,
-    exists: fs.existsSync(p),
-    ...(fs.existsSync(p) && fs.statSync(p).isDirectory()
-      ? { files: (() => { try { return fs.readdirSync(p); } catch { return []; } })() }
-      : {}),
-  });
+  const check = (p: string) => {
+    const exists = fs.existsSync(p);
+    if (!exists) return { path: p, exists: false };
+    const stat = fs.statSync(p);
+    if (stat.isDirectory()) {
+      const entries = (() => { try { return fs.readdirSync(p); } catch { return []; } })();
+      return {
+        path: p, exists: true, type: 'directory',
+        files: entries.map((f) => {
+          const full = path.join(p, f);
+          const s = (() => { try { return fs.statSync(full); } catch { return null; } })();
+          return s ? `${f} (${s.isDirectory() ? 'dir' : `file, ${s.size}B`})` : f;
+        }),
+      };
+    }
+    return { path: p, exists: true, type: 'file', size: stat.size };
+  };
   res.json({
     platform: process.platform,
     copilotHome: paths.base,

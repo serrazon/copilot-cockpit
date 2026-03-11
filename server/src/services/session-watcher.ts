@@ -26,7 +26,9 @@ class SessionWatcher extends EventEmitter {
 
     const targets: string[] = [toGlob(commandHistoryState)];
     if (fs.existsSync(sessionStateDir)) {
-      targets.push(toGlob(sessionStateDir) + '/**/*.json');
+      // Session files on Windows are UUID-named with NO extension (e.g. "00e66b8c-...")
+      // Watch everything inside the directory and try to parse each as JSON
+      targets.push(toGlob(sessionStateDir) + '/**/*');
     } else {
       console.warn(`[session-watcher] ${sessionStateDir} not found, retrying in 10s`);
       this.retryTimer = setTimeout(() => this._watch(), 10_000);
