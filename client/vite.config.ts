@@ -17,4 +17,13 @@ export default defineConfig({
       '/api': 'http://localhost:3001',
     },
   },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: [],
+    alias: {
+      '@shared': path.resolve(__dirname, '../shared/src'),
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
 });
