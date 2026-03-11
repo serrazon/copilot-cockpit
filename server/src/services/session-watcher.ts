@@ -9,6 +9,30 @@ function toGlob(p: string) {
   return p.split(path.sep).join('/');
 }
 
+/** Parse a flat key: value YAML file (no nesting, no arrays needed). */
+function parseSimpleYaml(raw: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const line of raw.split('\n')) {
+    const trimmed = line.replace(/\r$/, '').trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const colonIdx = trimmed.indexOf(':');
+    if (colonIdx === -1) continue;
+    const key = trimmed.slice(0, colonIdx).trim();
+    const val = trimmed.slice(colonIdx + 1).trim();
+    result[key] = val;
+  }
+  return result;
+}
+
+/** Parse an ISO date string or unix-ms number to a timestamp. */
+function toTs(v: string | undefined): number {
+  if (!v) return Date.now();
+  const n = Number(v);
+  if (!isNaN(n)) return n;
+  const d = Date.parse(v);
+  return isNaN(d) ? Date.now() : d;
+}
+
 class SessionWatcher extends EventEmitter {
   private watcher: ReturnType<typeof chokidar.watch> | null = null;
   private sessions: Map<string, CopilotSession> = new Map();
@@ -69,7 +93,6 @@ class SessionWatcher extends EventEmitter {
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        // Sessions may be stored as a directory — look for JSON files inside
         this._scanDir(full);
       } else if (entry.isFile()) {
         this._parseFile(full);
@@ -78,10 +101,21 @@ class SessionWatcher extends EventEmitter {
   }
 
   private _parseFile(filePath: string) {
-    // Skip clearly non-JSON files
     const ext = path.extname(filePath).toLowerCase();
-    if (ext && ext !== '.json') return;
+    const base = path.basename(filePath);
 
+    // workspace.yaml — primary session file
+    if (base === 'workspace.yaml' || ext === '.yaml' || ext === '.yml') {
+      this._parseYaml(filePath);
+      return;
+    }
+
+    // Legacy JSON fallback (no extension or .json)
+    if (ext && ext !== '.json') return;
+    this._parseJson(filePath);
+  }
+
+  private _parseYaml(filePath: string) {
     let raw: string;
     try {
       raw = fs.readFileSync(filePath, 'utf8');
@@ -89,30 +123,53 @@ class SessionWatcher extends EventEmitter {
       return;
     }
 
-    if (!raw.trim().startsWith('{')) return; // not a JSON object
+    const d = parseSimpleYaml(raw);
+    const id = d['id'];
+    if (!id) return; // not a session file
+
+    // Determine status from updated_at recency
+    const updatedTs = toTs(d['updated_at']);
+    const ageMs = Date.now() - updatedTs;
+    const status: CopilotSession['status'] =
+      ageMs < 5 * 60 * 1000 ? 'active' : ageMs < 30 * 60 * 1000 ? 'idle' : 'ended';
+
+    const session: CopilotSession = {
+      id,
+      startTime: toTs(d['created_at']),
+      endTime: updatedTs !== toTs(d['created_at']) ? updatedTs : undefined,
+      interactions: d['summary_count'] ? parseInt(d['summary_count'], 10) || 0 : 0,
+      model: d['model'] ?? 'unknown',
+      status,
+      cwd: d['cwd'],
+      summary: d['summary'],
+    };
+
+    this.sessions.set(id, session);
+    this.emit('sessions', this.getSessions());
+  }
+
+  private _parseJson(filePath: string) {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(filePath, 'utf8');
+    } catch {
+      return;
+    }
+
+    if (!raw.trim().startsWith('{')) return;
 
     let data: unknown;
     try {
       data = JSON.parse(raw);
     } catch {
-      return; // mid-write or not JSON
+      return;
     }
 
-    const session = this._coerce(filePath, data);
-    if (!session) return;
-
-    this.sessions.set(session.id, session);
-    this.emit('sessions', this.getSessions());
-  }
-
-  private _coerce(filePath: string, data: unknown): CopilotSession | null {
-    if (typeof data !== 'object' || data === null) return null;
+    if (typeof data !== 'object' || data === null) return;
     const d = data as Record<string, unknown>;
+    if (!d['id'] && !d['startTime'] && !d['model']) return;
 
-    // Must have at least a recognisable session shape
-    if (!d['id'] && !d['startTime'] && !d['model']) return null;
-
-    return {
+    const session: CopilotSession = {
       id: typeof d['id'] === 'string' ? d['id'] : path.basename(filePath, '.json'),
       startTime: typeof d['startTime'] === 'number' ? d['startTime'] : Date.now(),
       endTime: typeof d['endTime'] === 'number' ? d['endTime'] : undefined,
@@ -124,6 +181,9 @@ class SessionWatcher extends EventEmitter {
         ? (d['status'] as CopilotSession['status'])
         : 'idle',
     };
+
+    this.sessions.set(session.id, session);
+    this.emit('sessions', this.getSessions());
   }
 
   stop() {

@@ -15,6 +15,8 @@ export interface CopilotSession {
   interactions: number;
   model: string;
   status: 'active' | 'idle' | 'ended';
+  cwd?: string;
+  summary?: string;
 }
 
 export interface McpServerConfig {

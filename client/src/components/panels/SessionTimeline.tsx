@@ -43,8 +43,8 @@ export function SessionTimeline() {
               <span className="text-[oklch(0.55_0.10_195)] truncate max-w-[50%]">
                 {session.id.slice(0, 12)}…
               </span>
-              <span className="text-[oklch(0.40_0.05_220)]">
-                {session.model} · {session.interactions} msgs
+              <span className="text-[oklch(0.40_0.05_220)] truncate max-w-[48%]" title={session.cwd}>
+                {session.summary ?? session.model} · {session.interactions} interactions
               </span>
             </div>
 
