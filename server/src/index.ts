@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import http from 'http';
+import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { ServerMessage } from '@shared/types/ws-messages.js';
 import { logWatcher } from './services/log-watcher.js';
@@ -8,6 +9,7 @@ import { sessionWatcher } from './services/session-watcher.js';
 import { processMonitor } from './services/process-monitor.js';
 import { systemMonitor } from './services/system-monitor.js';
 import { configWatcher } from './services/config-watcher.js';
+import { getCopilotPaths } from './services/copilot-paths.js';
 
 const PORT = process.env['PORT'] ? parseInt(process.env['PORT']) : 3001;
 
@@ -27,6 +29,29 @@ app.get('/api/config', (_req, res) => {
 
 app.get('/api/processes', (_req, res) => {
   res.json(processMonitor.getProcesses());
+});
+
+// Debug endpoint — shows what paths are being watched and whether they exist
+app.get('/api/debug', (_req, res) => {
+  const paths = getCopilotPaths();
+  const check = (p: string) => ({
+    path: p,
+    exists: fs.existsSync(p),
+    ...(fs.existsSync(p) && fs.statSync(p).isDirectory()
+      ? { files: (() => { try { return fs.readdirSync(p); } catch { return []; } })() }
+      : {}),
+  });
+  res.json({
+    platform: process.platform,
+    copilotHome: paths.base,
+    paths: Object.fromEntries(
+      Object.entries(paths).map(([k, v]) => [k, check(v)])
+    ),
+    env: {
+      COPILOT_HOME: process.env['COPILOT_HOME'] ?? '(not set)',
+      PORT: process.env['PORT'] ?? '(not set)',
+    },
+  });
 });
 
 // ── SSE endpoint ───────────────────────────────────────────────────────────────

@@ -34,9 +34,12 @@ class ConfigWatcher extends EventEmitter {
       return;
     }
 
-    const targets = [configJson, mcpConfigJson];
+    // Forward slashes required by chokidar on Windows
+    const toGlob = (p: string) => p.split(path.sep).join('/');
+
+    const targets = [toGlob(configJson), toGlob(mcpConfigJson)];
     if (fs.existsSync(agentsDir)) {
-      targets.push(path.join(agentsDir, '*.md'));
+      targets.push(toGlob(agentsDir) + '/*.md');
     }
 
     console.log(`[config-watcher] Watching config files in ${base}`);
@@ -45,6 +48,7 @@ class ConfigWatcher extends EventEmitter {
       ignoreInitial: false,
       persistent: true,
       usePolling: process.platform === 'win32',
+      interval: 500,
     });
 
     this.watcher.on('add', () => this._reload());

@@ -21,9 +21,12 @@ class SessionWatcher extends EventEmitter {
   private _watch() {
     const { sessionStateDir, commandHistoryState } = getCopilotPaths();
 
-    const targets: string[] = [commandHistoryState];
+    // Use forward slashes in glob patterns — required by chokidar on Windows
+    const toGlob = (p: string) => p.split(path.sep).join('/');
+
+    const targets: string[] = [toGlob(commandHistoryState)];
     if (fs.existsSync(sessionStateDir)) {
-      targets.push(path.join(sessionStateDir, '**', '*.json'));
+      targets.push(toGlob(sessionStateDir) + '/**/*.json');
     } else {
       console.warn(`[session-watcher] ${sessionStateDir} not found, retrying in 10s`);
       this.retryTimer = setTimeout(() => this._watch(), 10_000);
@@ -36,6 +39,7 @@ class SessionWatcher extends EventEmitter {
       ignoreInitial: false,
       persistent: true,
       usePolling: process.platform === 'win32',
+      interval: 500,
     });
 
     this.watcher.on('add', (p) => this._parseFile(p));
