@@ -5,6 +5,10 @@ import chokidar from 'chokidar';
 import type { CopilotSession } from '@shared/types/copilot.js';
 import { getCopilotPaths } from './copilot-paths.js';
 
+function toGlob(p: string) {
+  return p.split(path.sep).join('/');
+}
+
 class SessionWatcher extends EventEmitter {
   private watcher: ReturnType<typeof chokidar.watch> | null = null;
   private sessions: Map<string, CopilotSession> = new Map();
@@ -21,15 +25,7 @@ class SessionWatcher extends EventEmitter {
   private _watch() {
     const { sessionStateDir, commandHistoryState } = getCopilotPaths();
 
-    // Use forward slashes in glob patterns — required by chokidar on Windows
-    const toGlob = (p: string) => p.split(path.sep).join('/');
-
-    const targets: string[] = [toGlob(commandHistoryState)];
-    if (fs.existsSync(sessionStateDir)) {
-      // Session files on Windows are UUID-named with NO extension (e.g. "00e66b8c-...")
-      // Watch everything inside the directory and try to parse each as JSON
-      targets.push(toGlob(sessionStateDir) + '/**/*');
-    } else {
+    if (!fs.existsSync(sessionStateDir)) {
       console.warn(`[session-watcher] ${sessionStateDir} not found, retrying in 10s`);
       this.retryTimer = setTimeout(() => this._watch(), 10_000);
       return;
@@ -37,8 +33,20 @@ class SessionWatcher extends EventEmitter {
 
     console.log(`[session-watcher] Watching ${sessionStateDir}`);
 
+    // ── Step 1: eagerly load all existing sessions ─────────────────────────────
+    this._scanDir(sessionStateDir);
+    if (fs.existsSync(commandHistoryState)) {
+      this._parseFile(commandHistoryState);
+    }
+
+    // ── Step 2: watch for new/changed files ────────────────────────────────────
+    const targets = [
+      toGlob(sessionStateDir) + '/**/*',
+      toGlob(commandHistoryState),
+    ];
+
     this.watcher = chokidar.watch(targets, {
-      ignoreInitial: false,
+      ignoreInitial: true,   // already loaded above
       persistent: true,
       usePolling: process.platform === 'win32',
       interval: 500,
@@ -49,7 +57,30 @@ class SessionWatcher extends EventEmitter {
     this.watcher.on('error', (err) => console.error('[session-watcher] Error:', err));
   }
 
+  private _scanDir(dir: string) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        // Sessions may be stored as a directory — look for JSON files inside
+        this._scanDir(full);
+      } else if (entry.isFile()) {
+        this._parseFile(full);
+      }
+    }
+  }
+
   private _parseFile(filePath: string) {
+    // Skip clearly non-JSON files
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext && ext !== '.json') return;
+
     let raw: string;
     try {
       raw = fs.readFileSync(filePath, 'utf8');
@@ -57,12 +88,13 @@ class SessionWatcher extends EventEmitter {
       return;
     }
 
+    if (!raw.trim().startsWith('{')) return; // not a JSON object
+
     let data: unknown;
     try {
       data = JSON.parse(raw);
     } catch {
-      // File may be mid-write
-      return;
+      return; // mid-write or not JSON
     }
 
     const session = this._coerce(filePath, data);
@@ -75,13 +107,19 @@ class SessionWatcher extends EventEmitter {
   private _coerce(filePath: string, data: unknown): CopilotSession | null {
     if (typeof data !== 'object' || data === null) return null;
     const d = data as Record<string, unknown>;
+
+    // Must have at least a recognisable session shape
+    if (!d['id'] && !d['startTime'] && !d['model']) return null;
+
     return {
-      id: (d['id'] as string) ?? path.basename(filePath, '.json'),
+      id: typeof d['id'] === 'string' ? d['id'] : path.basename(filePath, '.json'),
       startTime: typeof d['startTime'] === 'number' ? d['startTime'] : Date.now(),
       endTime: typeof d['endTime'] === 'number' ? d['endTime'] : undefined,
       interactions: typeof d['interactions'] === 'number' ? d['interactions'] : 0,
       model: typeof d['model'] === 'string' ? d['model'] : 'unknown',
-      status: (['active', 'idle', 'ended'] as const).includes(d['status'] as CopilotSession['status'])
+      status: (['active', 'idle', 'ended'] as const).includes(
+        d['status'] as CopilotSession['status']
+      )
         ? (d['status'] as CopilotSession['status'])
         : 'idle',
     };

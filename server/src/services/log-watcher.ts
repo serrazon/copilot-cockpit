@@ -27,13 +27,18 @@ function parseTimestamp(line: string): number {
   return Date.now();
 }
 
-// Normalise to forward slashes for chokidar glob patterns (required on Windows)
-function toGlob(dir: string, pattern: string): string {
-  return dir.split(path.sep).join('/') + '/' + pattern;
+function toGlob(dir: string): string {
+  return dir.split(path.sep).join('/') + '/**/*';
 }
 
-// How many bytes to read back from an existing file on initial attach
-const INITIAL_TAIL_BYTES = 32 * 1024; // 32 KB
+// On startup, tail the last N bytes of existing files
+const INITIAL_TAIL_BYTES = 32 * 1024;
+
+// Accept .log, .txt, and no-extension files
+function isLogFile(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase();
+  return ext === '.log' || ext === '.txt' || ext === '';
+}
 
 class LogWatcher extends EventEmitter {
   private watcher: ReturnType<typeof chokidar.watch> | null = null;
@@ -55,40 +60,52 @@ class LogWatcher extends EventEmitter {
 
     console.log(`[log-watcher] Watching ${logsDir}`);
 
-    // Use forward-slash glob — chokidar requires this even on Windows
-    const glob = toGlob(logsDir, '**/*');
+    // ── Step 1: eagerly read all existing files right now ─────────────────────
+    // Don't trust chokidar 'add' events for pre-existing files on Windows polling
+    this._scanDir(logsDir);
 
-    this.watcher = chokidar.watch(glob, {
-      ignoreInitial: false,
+    // ── Step 2: watch for new files and changes ────────────────────────────────
+    this.watcher = chokidar.watch(toGlob(logsDir), {
+      ignoreInitial: true,   // we already read everything above
       persistent: true,
       usePolling: process.platform === 'win32',
-      interval: 500,         // poll every 500ms on Windows
+      interval: 500,
       binaryInterval: 1000,
-      // ignore hidden files and directories, but watch all file extensions
       ignored: /(^|[/\\])\../,
     });
 
     this.watcher.on('add', (filePath) => {
-      if (!this._isLogFile(filePath)) return;
-      console.log(`[log-watcher] Tracking: ${path.basename(filePath)}`);
+      if (!isLogFile(filePath)) return;
       this._readInitial(filePath);
     });
 
     this.watcher.on('change', (filePath) => {
-      if (!this._isLogFile(filePath)) return;
+      if (!isLogFile(filePath)) return;
       this._readNewBytes(filePath);
     });
 
     this.watcher.on('error', (err) => console.error('[log-watcher] Error:', err));
   }
 
-  // Accept .log, .txt, and files with no extension (Copilot CLI varies across versions)
-  private _isLogFile(filePath: string): boolean {
-    const ext = path.extname(filePath).toLowerCase();
-    return ext === '.log' || ext === '.txt' || ext === '';
+  // Eagerly scan a directory and read the tail of every matching file
+  private _scanDir(dir: string) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        this._scanDir(full);
+      } else if (entry.isFile() && isLogFile(full)) {
+        this._readInitial(full);
+      }
+    }
   }
 
-  // On first attach to an existing file, tail the last INITIAL_TAIL_BYTES
   private _readInitial(filePath: string) {
     let stat: fs.Stats;
     try {
@@ -102,7 +119,6 @@ class LogWatcher extends EventEmitter {
       return;
     }
 
-    // Read from max(0, size - INITIAL_TAIL_BYTES) so we see recent history
     const start = Math.max(0, stat.size - INITIAL_TAIL_BYTES);
     this.fileSizes.set(filePath, stat.size);
     this._readRange(filePath, start, stat.size - 1);
@@ -118,8 +134,8 @@ class LogWatcher extends EventEmitter {
 
     const lastSize = this.fileSizes.get(filePath) ?? 0;
 
-    // File rotation: size decreased → reset
     if (stat.size < lastSize) {
+      // File was rotated — reset
       this.fileSizes.set(filePath, 0);
     }
 
@@ -137,7 +153,6 @@ class LogWatcher extends EventEmitter {
     stream.on('data', (chunk) =>
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
     );
-
     stream.on('end', () => {
       const text = Buffer.concat(chunks).toString('utf8').replace(/\r\n/g, '\n');
       const source = path.basename(filePath).replace(/\.[^.]+$/, '') || path.basename(filePath);
@@ -145,18 +160,15 @@ class LogWatcher extends EventEmitter {
       for (const rawLine of text.split('\n')) {
         const line = rawLine.trim();
         if (!line) continue;
-
-        const entry: LogEntry = {
+        this.emit('log', {
           id: nextId(),
           source,
           line,
           timestamp: parseTimestamp(line),
           level: parseLevel(line),
-        };
-        this.emit('log', entry);
+        } satisfies LogEntry);
       }
     });
-
     stream.on('error', (err) => console.error('[log-watcher] Read error:', err));
   }
 
