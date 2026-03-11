@@ -100,7 +100,7 @@ export function MetricsPanel() {
 
   const cpuPct = metrics ? Math.round(metrics.cpu) : 0;
   const memPct = metrics ? Math.round((metrics.memory.used / metrics.memory.total) * 100) : 0;
-  const activeSessions = sessions.filter((s) => s.status === 'active').length;
+  const activeSessions = sessions.filter((s) => s.status === 'active' || s.status === 'idle').length;
 
   const cpuHistory = useCpuHistory(cpuPct);
   prevMetrics.current = metrics;
@@ -126,7 +126,7 @@ export function MetricsPanel() {
         <KpiCard label="CPU" value={cpuPct} unit="%" warn={cpuPct > 80} />
         <KpiCard label="Memory" value={memPct} unit="%" warn={memPct > 85} />
         <KpiCard label="Processes" value={processes.length} />
-        <KpiCard label="Sessions" value={activeSessions} />
+        <KpiCard label="Sessions" value={sessions.length} unit={activeSessions > 0 ? `${activeSessions} active` : undefined} />
       </div>
 
       {/* CPU sparkline */}
