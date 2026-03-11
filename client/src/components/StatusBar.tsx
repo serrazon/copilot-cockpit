@@ -87,7 +87,7 @@ export function StatusBar() {
         <span>
           SESSIONS{' '}
           <span className="text-[oklch(0.65_0.20_195)]">
-            {sessions.filter((s) => s.status === 'active').length}
+            {sessions.filter((s) => s.status === 'active' || s.status === 'idle').length}
           </span>
           <span className="text-[oklch(0.40_0.05_220)]">/{sessions.length}</span>
         </span>
