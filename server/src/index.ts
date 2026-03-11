@@ -52,12 +52,40 @@ app.get('/api/debug', (_req, res) => {
     }
     return { path: p, exists: true, type: 'file', size: stat.size };
   };
+  // Peek inside the first 3 session subdirectories to understand their structure
+  const sessionPeek: Record<string, unknown> = {};
+  try {
+    const sessionDir = paths.sessionStateDir;
+    if (fs.existsSync(sessionDir)) {
+      const entries = fs.readdirSync(sessionDir, { withFileTypes: true });
+      const subdirs = entries.filter((e) => e.isDirectory()).slice(0, 3);
+      for (const d of subdirs) {
+        const full = path.join(sessionDir, d.name);
+        try {
+          const children = fs.readdirSync(full, { withFileTypes: true });
+          sessionPeek[d.name] = children.map((c) => {
+            const cf = path.join(full, c.name);
+            const cs = (() => { try { return fs.statSync(cf); } catch { return null; } })();
+            let preview = '';
+            if (cs && cs.isFile() && cs.size > 0 && cs.size < 4096) {
+              try { preview = fs.readFileSync(cf, 'utf8').slice(0, 200); } catch { /* skip */ }
+            }
+            return { name: c.name, type: c.isDirectory() ? 'dir' : 'file', size: cs?.size ?? 0, preview };
+          });
+        } catch { sessionPeek[d.name] = 'error reading'; }
+      }
+    }
+  } catch { /* skip */ }
+
   res.json({
     platform: process.platform,
     copilotHome: paths.base,
+    logBufferSize: logWatcher.getLogs().length,
+    sessionCount: sessionWatcher.getSessions().length,
     paths: Object.fromEntries(
       Object.entries(paths).map(([k, v]) => [k, check(v)])
     ),
+    sessionPeek,
     env: {
       COPILOT_HOME: process.env['COPILOT_HOME'] ?? '(not set)',
       PORT: process.env['PORT'] ?? '(not set)',
@@ -110,7 +138,7 @@ wss.on('connection', (ws) => {
   const init: ServerMessage = {
     type: 'init',
     payload: {
-      logs: [],
+      logs: logWatcher.getLogs(),
       processes: processMonitor.getProcesses(),
       sessions: sessionWatcher.getSessions(),
       metrics: systemMonitor.getMetrics(),

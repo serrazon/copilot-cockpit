@@ -38,6 +38,7 @@ class SessionWatcher extends EventEmitter {
     if (fs.existsSync(commandHistoryState)) {
       this._parseFile(commandHistoryState);
     }
+    console.log(`[session-watcher] Initial scan complete — ${this.sessions.size} sessions loaded`);
 
     // ── Step 2: watch for new/changed files ────────────────────────────────────
     const targets = [

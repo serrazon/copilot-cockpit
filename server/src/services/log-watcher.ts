@@ -40,13 +40,21 @@ function isLogFile(filePath: string): boolean {
   return ext === '.log' || ext === '.txt' || ext === '';
 }
 
+const MAX_BUFFERED_LOGS = 1000;
+
 class LogWatcher extends EventEmitter {
   private watcher: ReturnType<typeof chokidar.watch> | null = null;
   private fileSizes: Map<string, number> = new Map();
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private _logs: LogEntry[] = [];
 
   start() {
     this._watch();
+  }
+
+  /** Returns buffered log entries (up to MAX_BUFFERED_LOGS) for the init payload. */
+  getLogs(): LogEntry[] {
+    return this._logs.slice();
   }
 
   private _watch() {
@@ -62,7 +70,9 @@ class LogWatcher extends EventEmitter {
 
     // ── Step 1: eagerly read all existing files right now ─────────────────────
     // Don't trust chokidar 'add' events for pre-existing files on Windows polling
+    const before = this._logs.length;
     this._scanDir(logsDir);
+    console.log(`[log-watcher] Scheduled initial read for files in ${logsDir}`);
 
     // ── Step 2: watch for new files and changes ────────────────────────────────
     this.watcher = chokidar.watch(toGlob(logsDir), {
@@ -160,13 +170,16 @@ class LogWatcher extends EventEmitter {
       for (const rawLine of text.split('\n')) {
         const line = rawLine.trim();
         if (!line) continue;
-        this.emit('log', {
+        const entry: LogEntry = {
           id: nextId(),
           source,
           line,
           timestamp: parseTimestamp(line),
           level: parseLevel(line),
-        } satisfies LogEntry);
+        };
+        this._logs.push(entry);
+        if (this._logs.length > MAX_BUFFERED_LOGS) this._logs.shift();
+        this.emit('log', entry);
       }
     });
     stream.on('error', (err) => console.error('[log-watcher] Read error:', err));
