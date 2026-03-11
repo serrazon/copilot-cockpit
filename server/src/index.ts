@@ -32,6 +32,10 @@ app.get('/api/processes', (_req, res) => {
   res.json(processMonitor.getProcesses());
 });
 
+app.get('/api/sessions', (_req, res) => {
+  res.json(sessionWatcher.getSessions());
+});
+
 // Debug endpoint — shows what paths are being watched and whether they exist
 app.get('/api/debug', (_req, res) => {
   const paths = getCopilotPaths();
@@ -132,15 +136,17 @@ function broadcast(msg: ServerMessage) {
 }
 
 wss.on('connection', (ws) => {
-  console.log('[ws] Client connected');
+  const sessions = sessionWatcher.getSessions();
+  const logs = logWatcher.getLogs();
+  console.log(`[ws] Client connected — sending init: ${sessions.length} sessions, ${logs.length} logs`);
 
   // Send current state as init
   const init: ServerMessage = {
     type: 'init',
     payload: {
-      logs: logWatcher.getLogs(),
+      logs,
       processes: processMonitor.getProcesses(),
-      sessions: sessionWatcher.getSessions(),
+      sessions,
       metrics: systemMonitor.getMetrics(),
       config: configWatcher.getConfig(),
       networkEvents: [],

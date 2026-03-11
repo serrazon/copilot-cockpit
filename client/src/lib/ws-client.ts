@@ -42,8 +42,8 @@ class WsClient {
       try {
         const msg = JSON.parse(event.data as string) as ServerMessage;
         for (const h of this.messageHandlers) h(msg);
-      } catch {
-        // ignore malformed messages
+      } catch (err) {
+        console.error('[ws] Failed to parse message:', err, 'data length:', (event.data as string)?.length);
       }
     };
 
